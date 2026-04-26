@@ -1,0 +1,1013 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  runtime      = "bun"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model PointAdjustment {
+  id        String   @id @default(cuid())
+  userId    String
+  points    Int
+  reason    String
+  adminId   String?
+  createdAt DateTime @default(now())
+  admin     User?    @relation("AdminAdjustments", fields: [adminId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("point_adjustments")
+}
+
+model User {
+  id               String                  @id @default(cuid())
+  name             String?
+  email            String                  @unique
+  emailVerified    Boolean                 @default(false)
+  image            String?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  discordId        String?                 @unique
+  discordTag       String?
+  role             String?                 @default("user")
+  banned           Boolean?                @default(false)
+  banReason        String?
+  banExpires       DateTime?
+  username         String?                 @unique
+  displayUsername  String?
+  twoFactorEnabled Boolean                 @default(false)
+  activities       Json?                   @default("[]")
+  globalName       String?
+  joinedAt         DateTime?
+  nickname         String?
+  premiumSince     DateTime?
+  roles            Json?                   @default("[]")
+  serverAvatar     String?
+  status           String?
+  ipAddress        String?
+  lastIpAddress    String?
+  accounts         Account[]
+  decks            Deck[]
+  adminAdjustments PointAdjustment[]       @relation("AdminAdjustments")
+  pointAdjustments PointAdjustment[]
+  profile          Profile?
+  globalRanking    GlobalRanking?
+  seasonEntries    SeasonEntry[]
+  sessions         Session[]
+  tickets          Ticket[]
+  player1Matches   TournamentMatch[]       @relation("Player1Matches")
+  player2Matches   TournamentMatch[]       @relation("Player2Matches")
+  winnerMatches    TournamentMatch[]       @relation("WinnerMatches")
+  tournaments      TournamentParticipant[]
+  twoFactors       TwoFactor[]
+  animeProgress    AnimeWatchProgress[]
+  cardInventory    CardInventory[]
+  partInventory    PartInventory[]
+  transactions     CurrencyTransaction[]
+
+  @@map("users")
+}
+
+model RankingSeason {
+  id        String        @id @default(cuid())
+  name      String
+  slug      String        @unique
+  startDate DateTime      @default(now())
+  endDate   DateTime?
+  isActive  Boolean       @default(true)
+  entries   SeasonEntry[]
+
+  @@map("ranking_seasons")
+}
+
+model SeasonEntry {
+  id             String        @id @default(cuid())
+  seasonId       String
+  userId         String?
+  playerName     String?
+  points         Int
+  wins           Int
+  losses         Int
+  tournamentWins Int
+  rank           Int?
+  season         RankingSeason @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([seasonId])
+  @@index([userId])
+  @@index([playerName])
+  @@map("season_entries")
+}
+
+model GlobalRanking {
+  id               String   @id @default(cuid())
+  playerName       String   @unique
+  userId           String?  @unique
+  points           Int      @default(0)
+  wins             Int      @default(0)
+  losses           Int      @default(0)
+  tournamentWins   Int      @default(0)
+  tournamentsCount Int      @default(0)
+  avatarUrl        String?
+  updatedAt        DateTime @updatedAt
+  user             User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([points])
+  @@map("global_rankings")
+}
+
+model Session {
+  id             String   @id @default(cuid())
+  expiresAt      DateTime
+  token          String   @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  ipAddress      String?
+  userAgent      String?
+  userId         String
+  impersonatedBy String?
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model TwoFactor {
+  id          String @id @default(cuid())
+  secret      String
+  backupCodes String
+  userId      String
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("two_factors")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+model Profile {
+  id                String          @id @default(cuid())
+  userId            String          @unique
+  bladerName        String?
+  favoriteType      BeyType?
+  experience        ExperienceLevel @default(BEGINNER)
+  bio               String?
+  wins              Int             @default(0)
+  losses            Int             @default(0)
+  tournamentWins    Int             @default(0)
+  twitterHandle     String?
+  tiktokHandle      String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  rankingPoints     Int             @default(0)
+  challongeUsername String?
+  deckBoxImage      String?
+  currency          Int             @default(0)
+  lastDaily         DateTime?
+  dailyStreak       Int             @default(0)
+  pityCount         Int             @default(0)
+  lastGiftSent      DateTime?
+  // Duel TCG stats
+  duelRating        Int             @default(1000)
+  duelWins          Int             @default(0)
+  duelLosses        Int             @default(0)
+  duelStreak        Int             @default(0)
+  duelBestStreak    Int             @default(0)
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wishlist          CardWishlist[]
+
+  @@index([rankingPoints])
+  @@index([duelRating])
+  @@map("profiles")
+}
+
+model Ticket {
+  id        String    @id @default(cuid())
+  channelId String    @unique
+  userId    String
+  type      String
+  status    String    @default("OPEN")
+  createdAt DateTime  @default(now())
+  closedAt  DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("tickets")
+}
+
+model RankingSystem {
+  id             String   @id @default(cuid())
+  participation  Int      @default(5)
+  firstPlace     Int      @default(20)
+  secondPlace    Int      @default(15)
+  thirdPlace     Int      @default(10)
+  top8           Int      @default(5)
+  matchWin       Int      @default(2)
+  updatedAt      DateTime @updatedAt
+  matchWinLoser  Int      @default(500)
+  matchWinWinner Int      @default(1000)
+
+  @@map("ranking_system")
+}
+
+model Part {
+  id            String     @id @default(cuid())
+  externalId    String     @unique
+  name          String
+  nameJp        String?
+  type          PartType
+  beyType       BeyType?
+  weight        Float?
+  attack        String?
+  defense       String?
+  stamina       String?
+  burst         String?
+  dash          String?
+  height        Int?
+  protrusions   Int?
+  gearRatio     String?
+  shaftWidth    String?
+  tipType       String?
+  releaseDate   DateTime?
+  imageUrl      String?
+  rarity        String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  modelUrl      String?
+  textureUrl    String?
+  spinDirection String?
+  system        String?
+  beyBits          Beyblade[] @relation("BeyBitRelation")
+  beyBlades        Beyblade[] @relation("BeyBladeRelation")
+  beyRatchets      Beyblade[] @relation("BeyRatchetRelation")
+  deckBits         DeckItem[] @relation("BitRelation")
+  deckBlades       DeckItem[] @relation("BladeRelation")
+  deckOverBlades   DeckItem[] @relation("OverBladeRelation")
+  deckRatchets     DeckItem[] @relation("RatchetRelation")
+  deckLockChips    DeckItem[] @relation("LockChipRelation")
+  deckAssistBlades DeckItem[] @relation("AssistBladeRelation")
+  partInventory    PartInventory[]
+
+  @@index([type])
+  @@index([beyType])
+  @@map("parts")
+}
+
+model Beyblade {
+  id           String     @id @default(cuid())
+  code         String     @unique
+  name         String
+  nameEn       String?
+  nameFr       String?
+  bladeId      String
+  ratchetId    String
+  bitId        String
+  beyType      BeyType?
+  totalAttack  Int?
+  totalDefense Int?
+  totalStamina Int?
+  totalBurst   Int?
+  totalDash    Int?
+  totalWeight  Float?
+  imageUrl     String?
+  productId    String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  bit          Part       @relation("BeyBitRelation", fields: [bitId], references: [id])
+  blade        Part       @relation("BeyBladeRelation", fields: [bladeId], references: [id])
+  product      Product?   @relation(fields: [productId], references: [id])
+  ratchet      Part       @relation("BeyRatchetRelation", fields: [ratchetId], references: [id])
+  deckItems    DeckItem[]
+
+  @@index([beyType])
+  @@map("beyblades")
+}
+
+model Deck {
+  id                     String                  @id @default(cuid())
+  name                   String
+  isActive               Boolean                 @default(false)
+  userId                 String
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  items                  DeckItem[]
+  user                   User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tournamentParticipants TournamentParticipant[]
+
+  @@index([userId])
+  @@map("decks")
+}
+
+model DeckItem {
+  id            String    @id @default(cuid())
+  position      Int
+  deckId        String
+  beyId         String?
+  bladeId       String?
+  overBladeId   String?
+  ratchetId     String?
+  bitId         String?
+  lockChipId    String?
+  assistBladeId String?
+  bey           Beyblade? @relation(fields: [beyId], references: [id])
+  bit           Part?     @relation("BitRelation", fields: [bitId], references: [id])
+  blade         Part?     @relation("BladeRelation", fields: [bladeId], references: [id])
+  overBlade     Part?     @relation("OverBladeRelation", fields: [overBladeId], references: [id])
+  deck          Deck      @relation(fields: [deckId], references: [id], onDelete: Cascade)
+  ratchet       Part?     @relation("RatchetRelation", fields: [ratchetId], references: [id])
+  lockChip      Part?     @relation("LockChipRelation", fields: [lockChipId], references: [id])
+  assistBlade   Part?     @relation("AssistBladeRelation", fields: [assistBladeId], references: [id])
+
+  @@unique([deckId, position])
+  @@index([deckId])
+  @@map("deck_items")
+}
+
+model Tournament {
+  id                    String                  @id @default(cuid())
+  name                  String
+  description           String?
+  date                  DateTime
+  location              String?
+  format                String                  @default("3on3 Double Elimination")
+  maxPlayers            Int                     @default(64)
+  challongeId           String?                 @unique
+  challongeUrl          String?
+  challongeState        String?
+  posterUrl             String?
+  registrationStart     DateTime?
+  registrationEnd       DateTime?
+  announcementMessageId String?
+  channelId             String?
+  status                TournamentStatus        @default(UPCOMING)
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  weight                Float                   @default(1.0)
+  categoryId            String?
+  activityLog           Json?
+  standings             Json?
+  stations              Json?
+  matches               TournamentMatch[]
+  participants          TournamentParticipant[]
+  category              TournamentCategory?     @relation(fields: [categoryId], references: [id])
+
+  @@map("tournaments")
+}
+
+model TournamentCategory {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  multiplier  Float        @default(1.0)
+  color       String?
+  logoUrl     String?
+  tournaments Tournament[]
+
+  @@map("tournament_categories")
+}
+
+model TournamentParticipant {
+  id                     String     @id @default(cuid())
+  tournamentId           String
+  userId                 String?
+  playerName             String?
+  challongeParticipantId String?
+  deckId                 String?
+  checkedIn              Boolean    @default(false)
+  seed                   Int?
+  finalPlacement         Int?
+  wins                   Int        @default(0)
+  losses                 Int        @default(0)
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+  deck                   Deck?      @relation(fields: [deckId], references: [id])
+  tournament             Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  user                   User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tournamentId])
+  @@index([userId])
+  @@index([playerName])
+  @@map("tournament_participants")
+}
+
+model TournamentMatch {
+  id               String     @id @default(cuid())
+  tournamentId     String
+  challongeMatchId String?
+  round            Int
+  player1Id        String?
+  player2Id        String?
+  winnerId         String?
+  player1Name      String?
+  player2Name      String?
+  winnerName       String?
+  score            String?
+  state            String     @default("pending")
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  player1          User?      @relation("Player1Matches", fields: [player1Id], references: [id])
+  player2          User?      @relation("Player2Matches", fields: [player2Id], references: [id])
+  tournament       Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  winner           User?      @relation("WinnerMatches", fields: [winnerId], references: [id])
+
+  @@unique([tournamentId, challongeMatchId])
+  @@index([tournamentId])
+  @@map("tournament_matches")
+}
+
+model StaffMember {
+  id               String    @id @default(cuid())
+  name             String
+  role             String
+  teamId           String
+  imageUrl         String?
+  discordId        String?
+  displayIndex     Int       @default(0)
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  accountCreatedAt DateTime?
+  activities       Json?     @default("[]")
+  globalName       String?
+  joinedAt         DateTime?
+  nickname         String?
+  premiumSince     DateTime?
+  roles            Json?     @default("[]")
+  serverAvatar     String?
+  status           String?
+
+  @@map("staff_members")
+}
+
+model ContentBlock {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  title     String?
+  type      String   @default("text")
+  content   String
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("content_blocks")
+}
+
+model Product {
+  id            String      @id @default(cuid())
+  code          String      @unique
+  name          String
+  nameEn        String?
+  nameFr        String?
+  productType   ProductType
+  productLine   ProductLine
+  price         Int?
+  releaseDate   DateTime?
+  isLimited     Boolean     @default(false)
+  limitedNote   String?
+  imageUrl      String?
+  productUrl    String?
+  shopUrl       String?
+  includedParts String[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  description   String?
+  hasbroCode    String?
+  nameHasbro    String?
+  beyblades     Beyblade[]
+
+  @@index([productLine])
+  @@index([productType])
+  @@map("products")
+}
+
+model BotCommand {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  description  String
+  response     String
+  enabled      Boolean  @default(true)
+  aliases      String[] @default([])
+  cooldown     Int      @default(0)
+  allowedRoles String[] @default([])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("bot_commands")
+}
+
+model DiscordRole {
+  id          String   @id
+  name        String
+  color       String
+  position    Int
+  icon        String?
+  permissions String
+  managed     Boolean  @default(false)
+  hoist       Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+
+  @@map("discord_roles")
+}
+
+model DiscordChannel {
+  id        String   @id
+  name      String
+  type      String
+  parentId  String?
+  position  Int
+  updatedAt DateTime @updatedAt
+
+  @@map("discord_channels")
+}
+
+model YouTubeVideo {
+  id            String   @id
+  title         String
+  channelName   String
+  channelId     String
+  channelAvatar String?
+  views         Int
+  thumbnail     String
+  url           String
+  duration      String
+  publishedAt   DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  isFeatured    Boolean  @default(true)
+
+  @@map("youtube_videos")
+}
+
+model SatrRanking {
+  id            String   @id @default(cuid())
+  rank          Int
+  playerName    String
+  score         Int
+  wins          Int
+  losses        Int      @default(0)
+  participation Int
+  winRate       String
+  pointsAverage String
+  season        Int      @default(2)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([playerName])
+  @@index([score])
+  @@index([season])
+  @@map("satr_rankings")
+}
+
+model SatrBlader {
+  id               String   @id @default(cuid())
+  name             String   @unique
+  totalWins        Int      @default(0)
+  totalLosses      Int      @default(0)
+  tournamentWins   Int      @default(0)
+  tournamentsCount Int      @default(0)
+  history          Json
+  linkedUserId     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([name])
+  @@map("satr_bladers")
+}
+
+model WbRanking {
+  id            String   @id @default(cuid())
+  rank          Int
+  playerName    String
+  score         Int
+  wins          Int
+  losses        Int      @default(0)
+  participation Int
+  winRate       String
+  pointsAverage String
+  season        Int      @default(2)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([playerName])
+  @@index([score])
+  @@index([season])
+  @@map("wb_rankings")
+}
+
+model WbBlader {
+  id               String   @id @default(cuid())
+  name             String   @unique
+  totalWins        Int      @default(0)
+  totalLosses      Int      @default(0)
+  tournamentWins   Int      @default(0)
+  tournamentsCount Int      @default(0)
+  history          Json
+  linkedUserId     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([name])
+  @@map("wb_bladers")
+}
+
+model StardustRanking {
+  id            String   @id @default(cuid())
+  rank          Int
+  playerName    String
+  score         Int
+  wins          Int
+  losses        Int      @default(0)
+  participation Int
+  winRate       String
+  pointsAverage String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([playerName])
+  @@index([score])
+  @@map("stardust_rankings")
+}
+
+model StardustBlader {
+  id               String   @id @default(cuid())
+  name             String   @unique
+  totalWins        Int      @default(0)
+  totalLosses      Int      @default(0)
+  tournamentWins   Int      @default(0)
+  tournamentsCount Int      @default(0)
+  history          Json
+  linkedUserId     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([name])
+  @@map("stardust_bladers")
+}
+
+enum BeyType {
+  ATTACK
+  DEFENSE
+  STAMINA
+  BALANCE
+}
+
+enum PartType {
+  BLADE
+  RATCHET
+  BIT
+  LOCK_CHIP
+  ASSIST_BLADE
+  OVER_BLADE
+}
+
+enum ExperienceLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+  LEGEND
+}
+
+enum TournamentStatus {
+  UPCOMING
+  REGISTRATION_OPEN
+  REGISTRATION_CLOSED
+  CHECKIN
+  UNDERWAY
+  COMPLETE
+  CANCELLED
+  ARCHIVED
+}
+
+enum ProductType {
+  STARTER
+  BOOSTER
+  RANDOM_BOOSTER
+  SET
+  DOUBLE_STARTER
+  TOOL
+  COLOR_CHOICE
+}
+
+enum ProductLine {
+  BX
+  UX
+  CX
+}
+
+// Economy & Gacha System
+enum CardRarity {
+  COMMON    // Commun
+  RARE      // Rare
+  SUPER_RARE // Super Rare (ex-EPIC)
+  LEGENDARY // Légendaire
+  SECRET    // Secrète (animation/effet spécial)
+}
+
+enum CardType {
+  PNG       // Image existante/officielle
+  ARTIST    // Dessinée par un artiste RPB
+}
+
+enum TransactionType {
+  DAILY_CLAIM
+  GACHA_PULL
+  ADMIN_GIVE
+  ADMIN_TAKE
+  TOURNAMENT_REWARD
+  SELL_CARD
+  STREAK_BONUS
+  MULTI_PULL
+  BADGE_REWARD
+  DUEL_REWARD
+}
+
+model DuelMatch {
+  id           String   @id @default(cuid())
+  challengerId String
+  opponentId   String
+  winnerId     String
+  bet          Int      @default(0)
+  score        String   // "2-1"
+  rounds       Json     @default("[]")
+  finishType   String   @default("SPIN FINISH")
+  createdAt    DateTime @default(now())
+
+  @@index([challengerId])
+  @@index([opponentId])
+  @@map("duel_matches")
+}
+
+// ── TCG Drop (collection thématique limitée) ──
+model GachaDrop {
+  id          String      @id @default(cuid())
+  slug        String      @unique
+  name        String      // "Personnages Principaux", etc.
+  theme       String      // Description du thème
+  season      Int         @default(1) // Numéro du drop (1, 2, 3...)
+  maxCards    Int         @default(32) // Max cartes dans ce drop
+  startDate   DateTime
+  endDate     DateTime    // ~3 mois après startDate
+  isActive    Boolean     @default(false)
+  imageUrl    String?     // Bannière/visuel du drop
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  cards       GachaCard[]
+
+  @@index([isActive])
+  @@map("gacha_drops")
+}
+
+model GachaCard {
+  id          String        @id @default(cuid())
+  slug        String        @unique
+  name        String
+  nameJp      String?
+  series      String        // Legacy: "METAL_MASTERS", etc.
+  rarity      CardRarity    @default(COMMON)
+  cardType    CardType      @default(PNG)
+  artistName  String?       // Nom de l'artiste (si ARTIST)
+  imageUrl    String?
+  beyblade    String?       // Associated beyblade name
+  description String?
+  dropRate    Float         @default(0)
+  isActive    Boolean       @default(true)
+  // Drop link
+  dropId      String?
+  drop        GachaDrop?    @relation(fields: [dropId], references: [id])
+  // TCG Stats
+  att         Int           @default(0)
+  def         Int           @default(0)
+  end         Int           @default(0)
+  equilibre   Int           @default(0)
+  element     String        @default("NEUTRAL")
+  specialMove String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  inventory   CardInventory[]
+  wishedBy    CardWishlist[]
+
+  @@index([series])
+  @@index([rarity])
+  @@index([dropId])
+  @@map("gacha_cards")
+}
+
+model CardInventory {
+  id        String    @id @default(cuid())
+  userId    String
+  cardId    String
+  count     Int       @default(1)
+  obtainedAt DateTime @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  card      GachaCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, cardId])
+  @@index([userId])
+  @@map("card_inventory")
+}
+
+model CardWishlist {
+  id        String    @id @default(cuid())
+  profileId String
+  cardId    String
+  createdAt DateTime  @default(now())
+  profile   Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  card      GachaCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, cardId])
+  @@index([profileId])
+  @@map("card_wishlists")
+}
+
+model PartInventory {
+  id         String   @id @default(cuid())
+  userId     String
+  partId     String
+  count      Int      @default(1)
+  obtainedAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  part       Part     @relation(fields: [partId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, partId])
+  @@index([userId])
+  @@map("part_inventory")
+}
+
+model CurrencyTransaction {
+  id        String          @id @default(cuid())
+  userId    String
+  amount    Int             // positive = gain, negative = spend
+  type      TransactionType
+  note      String?
+  createdAt DateTime        @default(now())
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("currency_transactions")
+}
+
+// Anime Streaming
+enum AnimeGeneration {
+  ORIGINAL
+  METAL
+  BURST
+  X
+}
+
+enum EpisodeSourceType {
+  YOUTUBE
+  DAILYMOTION
+  MP4
+  HLS
+  IFRAME
+}
+
+enum WatchStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+model AnimeSeries {
+  id           String          @id @default(cuid())
+  slug         String          @unique
+  title        String
+  titleJp      String?
+  titleFr      String?
+  generation   AnimeGeneration
+  synopsis     String?
+  posterUrl    String?
+  bannerUrl    String?
+  year         Int
+  episodeCount Int             @default(0)
+  sortOrder    Int             @default(0)
+  isPublished  Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  episodes     AnimeEpisode[]
+
+  @@index([generation])
+  @@index([isPublished])
+  @@map("anime_series")
+}
+
+model AnimeEpisode {
+  id           String               @id @default(cuid())
+  seriesId     String
+  number       Int
+  title        String
+  titleFr      String?
+  titleJp      String?
+  synopsis     String?
+  thumbnailUrl String?
+  duration     Int                  @default(0)
+  isPublished  Boolean              @default(true)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  series       AnimeSeries          @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  sources      AnimeEpisodeSource[]
+  progress     AnimeWatchProgress[]
+
+  @@unique([seriesId, number])
+  @@index([seriesId])
+  @@map("anime_episodes")
+}
+
+model AnimeEpisodeSource {
+  id        String            @id @default(cuid())
+  episodeId String
+  type      EpisodeSourceType
+  url       String
+  quality   String            @default("720p")
+  language  String            @default("VOSTFR")
+  priority  Int               @default(0)
+  isActive  Boolean           @default(true)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  episode   AnimeEpisode      @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@index([episodeId])
+  @@map("anime_episode_sources")
+}
+
+model AnimeWatchProgress {
+  id           String       @id @default(cuid())
+  userId       String
+  episodeId    String
+  status       WatchStatus  @default(NOT_STARTED)
+  progressTime Int          @default(0)
+  completedAt  DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode      AnimeEpisode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, episodeId])
+  @@index([userId])
+  @@index([episodeId])
+  @@map("anime_watch_progress")
+}
+
+// ─── Moderation ─────────────────────────────────────────────────────────────
+
+model Warning {
+  id        String   @id @default(cuid())
+  discordId String
+  moderator String
+  reason    String
+  createdAt DateTime @default(now())
+
+  @@index([discordId])
+  @@map("warnings")
+}
+
+// ─── Reminders ──────────────────────────────────────────────────────────────
+
+model Reminder {
+  id        String   @id @default(cuid())
+  discordId String
+  channelId String
+  message   String
+  expiresAt DateTime
+  fired     Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([discordId])
+  @@index([expiresAt])
+  @@map("reminders")
+}

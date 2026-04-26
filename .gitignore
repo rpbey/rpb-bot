@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+src/generated/
+
+# Environment
+.env
+.env.*
+
+# Cache and temporary files
+.cache/
+*.tsbuildinfo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Keep some hidden files
+!.dockerignore
+!.git*
+!.npmrc
+!.prettier*
+!.biome.json
+src/_entry-imports.generated.ts

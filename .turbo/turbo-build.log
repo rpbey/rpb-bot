@@ -1,0 +1,9 @@
+$ bun run schema:sync && bun run gen:entries && bun run patch:dht
+$ bash ../rpb-dashboard/scripts/sync-prisma-schema.sh
+✓ Copied /home/ubuntu/vps/apps/rpb-dashboard/prisma/schema.prisma → /home/ubuntu/vps/apps/rpb-bot/prisma/schema.prisma
+$ bun scripts/gen-entry-imports.ts
+[gen-entry-imports] Wrote 36 imports → src/_entry-imports.generated.ts
+$ bash scripts/patch-dht-debug.sh
+$ swc -d dist src --config-file .swcrc --strip-leading-paths
+[patch-dht] packages not found — skip
+Successfully compiled: 139 files with swc (84.98ms)

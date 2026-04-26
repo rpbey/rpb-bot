@@ -1,0 +1,48 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "import", "oxc"],
+  "jsPlugins": [
+    { "name": "rpb", "specifier": "/home/ubuntu/tools/oxlint-plugin-rpb/src/index.js" }
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "off",
+    "pedantic": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "env": {
+    "node": true,
+    "es2024": true
+  },
+  "ignorePatterns": ["dist/", "node_modules/", "*.cjs", "*.mjs"],
+  "rules": {
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/await-thenable": "error",
+    "typescript/no-explicit-any": "warn",
+    "typescript/consistent-type-imports": ["warn", { "prefer": "type-imports" }],
+    "typescript/no-unused-vars": "off",
+    "no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    "no-console": "off",
+    "no-await-in-loop": "off",
+    "import/no-duplicates": "error",
+    "import/no-self-import": "error",
+    "import/no-cycle": "off",
+    "import/default": "off",
+    "import/no-unassigned-import": "off",
+    "import/no-named-as-default": "off",
+    "rpb/no-direct-console": "warn",
+    "rpb/no-sync-fs-in-handler": "error"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.spec.ts"],
+      "rules": {
+        "typescript/no-explicit-any": "off"
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "moduleDetection": "force",
+    "noEmit": true
+  },
+  "exclude": ["src/tests", "**/*.test.ts", "**/*.spec.ts"]
+}

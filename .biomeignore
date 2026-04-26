@@ -1,0 +1,4 @@
+src/generated
+src/generated/**
+src/generated/prisma/**
+eslint.config.ts
