@@ -19,6 +19,7 @@ interface BtsParticipant {
 	seed?: number;
 	portraitUrl?: string;
 	finalRank?: number | null;
+	challongeUsername?: string | null;
 }
 
 interface BtsMatch {
@@ -93,11 +94,126 @@ const DASHBOARD_EXPORTS_DIR =
 	process.env.BTS_EXPORTS_DIR ??
 	"/home/ubuntu/vps/apps/rpb-dashboard/data/exports";
 
+const PARTICIPANTS_MAP_PATH = join(
+	DASHBOARD_EXPORTS_DIR,
+	"participants_map.json",
+);
+
 function normalizeKey(name: string): string {
 	return name
 		.toLowerCase()
 		.normalize("NFKD")
 		.replace(/[^\p{Letter}\p{Number}]+/gu, "");
+}
+
+function normForLookup(s: string | null | undefined): string {
+	return s
+		? s
+				.toLowerCase()
+				.normalize("NFKD")
+				.replace(/[^a-z0-9]/g, "")
+		: "";
+}
+
+interface MapEntry {
+	primaryName?: string;
+	challongeUsername?: string | null;
+	discordId?: string | null;
+	discordUsername?: string | null;
+	aliases?: string[];
+}
+
+/**
+ * Build a name → Discord User.image resolver. Joins three sources:
+ *   1. `participants_map.json` (alias → discordId/discordUsername)
+ *   2. `Profile.challongeUsername` → User.image
+ *   3. `User.username/name/globalName/nickname/discordTag/Profile.bladerName`
+ *      cascade (normalised exact match)
+ *
+ * Used to backfill Discord avatars on the leaderboard canvas — Challonge
+ * portrait stays as fallback when the player has no Discord linkage.
+ */
+async function loadDiscordResolver(): Promise<
+	(playerName: string, challongeUsername: string | null) => string | null
+> {
+	let map: Record<string, MapEntry> = {};
+	try {
+		map = JSON.parse(await readFile(PARTICIPANTS_MAP_PATH, "utf-8"));
+	} catch {}
+
+	const aliasToKey = new Map<string, string>();
+	for (const [k, e] of Object.entries(map)) {
+		const cs = new Set<string>([e.primaryName ?? "", ...(e.aliases ?? [])]);
+		if (e.challongeUsername) cs.add(e.challongeUsername);
+		if (e.discordUsername) cs.add(e.discordUsername);
+		for (const a of cs) {
+			const n = normForLookup(a);
+			if (n) aliasToKey.set(n, k);
+		}
+	}
+
+	const users = await prisma.user.findMany({
+		where: { discordId: { not: null } },
+		select: {
+			id: true,
+			discordId: true,
+			username: true,
+			displayUsername: true,
+			name: true,
+			globalName: true,
+			nickname: true,
+			discordTag: true,
+			image: true,
+			profile: { select: { challongeUsername: true, bladerName: true } },
+		},
+	});
+	const imageByDiscordId = new Map<string, string | null>();
+	for (const u of users) {
+		if (u.discordId) imageByDiscordId.set(u.discordId, u.image ?? null);
+	}
+	const imageByKey = new Map<string, string>();
+	const setIfFree = (k: string, img: string | null) => {
+		if (k && img && !imageByKey.has(k)) imageByKey.set(k, img);
+	};
+	for (const u of users)
+		if (u.profile?.challongeUsername)
+			setIfFree(normForLookup(u.profile.challongeUsername), u.image);
+	for (const u of users) {
+		setIfFree(normForLookup(u.username), u.image);
+		setIfFree(normForLookup(u.displayUsername), u.image);
+		setIfFree(normForLookup(u.globalName), u.image);
+		setIfFree(normForLookup(u.nickname), u.image);
+		setIfFree(normForLookup(u.discordTag), u.image);
+		setIfFree(normForLookup(u.profile?.bladerName), u.image);
+		setIfFree(normForLookup(u.name), u.image);
+	}
+
+	return (
+		playerName: string,
+		challongeUsername: string | null,
+	): string | null => {
+		// Try map → discordId → User.image
+		const cands = new Set<string>();
+		cands.add(normForLookup(playerName));
+		if (challongeUsername) cands.add(normForLookup(challongeUsername));
+		const mapKey = aliasToKey.get(normForLookup(playerName));
+		if (mapKey) {
+			const e = map[mapKey];
+			if (e?.discordId) {
+				const img = imageByDiscordId.get(e.discordId);
+				if (img) return img;
+			}
+			if (e?.challongeUsername) cands.add(normForLookup(e.challongeUsername));
+			if (e?.discordUsername) cands.add(normForLookup(e.discordUsername));
+			for (const a of e?.aliases ?? []) cands.add(normForLookup(a));
+		}
+		// Try cascade
+		for (const c of cands) {
+			const img = imageByKey.get(c);
+			if (img) return img;
+		}
+		return null;
+	};
 }
 
 async function loadBts(
@@ -141,15 +257,16 @@ async function getPointsConfig(): Promise<BtsPointsConfig> {
 function aggregate(
 	tournaments: Array<{ data: BtsTournament }>,
 	pts: BtsPointsConfig,
-): BtsRankingEntry[] {
+): Array<BtsRankingEntry & { challongeUsername: string | null }> {
 	interface Acc {
 		name: string;
+		challongeUsername: string | null;
 		points: number;
 		wins: number;
 		losses: number;
 		tournamentWins: number;
 		participations: number;
-		avatarUrl: string | null;
+		challongePortraitUrl: string | null;
 		bestFinish: number | null;
 	}
 	const players = new Map<string, Acc>();
@@ -165,17 +282,22 @@ function aggregate(
 			const key = normalizeKey(p.name);
 			const acc: Acc = players.get(key) ?? {
 				name: p.name,
+				challongeUsername: p.challongeUsername ?? null,
 				points: 0,
 				wins: 0,
 				losses: 0,
 				tournamentWins: 0,
 				participations: 0,
-				avatarUrl: null,
+				challongePortraitUrl: null,
 				bestFinish: null,
 			};
+			// Backfill identifiers across multi-tournament entries
+			if (!acc.challongeUsername && p.challongeUsername)
+				acc.challongeUsername = p.challongeUsername;
 			acc.participations += 1;
 			acc.points += pts.participation;
-			if (p.portraitUrl && !acc.avatarUrl) acc.avatarUrl = p.portraitUrl;
+			if (p.portraitUrl && !acc.challongePortraitUrl)
+				acc.challongePortraitUrl = p.portraitUrl;
 
 			const rank = p.finalRank ?? null;
 			if (rank) {
@@ -221,12 +343,15 @@ function aggregate(
 		.map((p, i) => ({
 			rank: i + 1,
 			playerName: p.name,
+			challongeUsername: p.challongeUsername,
 			points: p.points,
 			wins: p.wins,
 			losses: p.losses,
 			tournamentWins: p.tournamentWins,
 			participations: p.participations,
-			avatarUrl: p.avatarUrl,
+			// Discord avatar resolved post-aggregation; for now the raw
+			// Challonge portrait keeps the slot.
+			avatarUrl: p.challongePortraitUrl,
 			bestFinish: p.bestFinish,
 		}));
 }
@@ -240,8 +365,17 @@ export async function getBtsRanking(
 	const loaded = (await Promise.all(slugs.map(loadBts))).filter(
 		(t): t is { name: string; data: BtsTournament } => t !== null,
 	);
-	const pts = await getPointsConfig();
-	const entries = aggregate(loaded, pts);
+	const [pts, discordImageOf] = await Promise.all([
+		getPointsConfig(),
+		loadDiscordResolver().catch(() => () => null as string | null),
+	]);
+	const aggregated = aggregate(loaded, pts);
+
+	// Backfill Discord avatar — Discord prioritaire, Challonge en fallback
+	const entries: BtsRankingEntry[] = aggregated.map((e) => {
+		const discord = discordImageOf(e.playerName, e.challongeUsername);
+		return { ...e, avatarUrl: discord ?? e.avatarUrl };
+	});
 
 	const filtered = search
 		? entries.filter((e) =>
