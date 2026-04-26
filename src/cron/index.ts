@@ -105,12 +105,13 @@ export function setupCronJobs() {
 	// });
 
 	// ─── Stats / intégrations ─────────────────────────────────────────────
-	schedule({
-		name: "Daily stats report",
-		cron: "0 7 * * *",
-		paris: "09:00 CEST",
-		run: dailyStatsTask,
-	});
+	// Disabled — daily stats report obsolète.
+	// schedule({
+	// 	name: "Daily stats report",
+	// 	cron: "0 7 * * *",
+	// 	paris: "09:00 CEST",
+	// 	run: dailyStatsTask,
+	// });
 
 	schedule({
 		name: "BBX weekly meta",
