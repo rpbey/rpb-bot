@@ -74,13 +74,16 @@ export function setupCronJobs() {
 	});
 
 	// ─── Rankings (poke l'API rpb-dashboard) ──────────────────────────────
-	schedule({
-		name: "Ranking sync (WB + SATR sheets)",
-		cron: "*/15 * * * *",
-		paris: "toutes les 15 min",
-		run: rankingSyncTask,
-		runOnBoot: { delayMs: 45_000 },
-	});
+	// Disabled — sync sheets WB+SATR obsolète (sources Google Sheets non
+	// alimentées depuis BTS4). Manual refresh via timer systemd
+	// `rpb-ranking-sync.timer` côté VPS si besoin.
+	// schedule({
+	// 	name: "Ranking sync (WB + SATR sheets)",
+	// 	cron: "*/15 * * * *",
+	// 	paris: "toutes les 15 min",
+	// 	run: rankingSyncTask,
+	// 	runOnBoot: { delayMs: 45_000 },
+	// });
 
 	schedule({
 		name: "Sync Discord roles (points + top 10 SATR)",
