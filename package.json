@@ -30,7 +30,7 @@
 		"@rpbey/discordx": "catalog:",
 		"@rpbey/pagination": "workspace:*",
 		"@aphrody-code/canvas": "0.1.99-fork.4",
-		"@prisma/adapter-pg": "^7.7.0",
+		"@prisma/adapter-pg": "^7.8.0",
 		"@prisma/client": "catalog:",
 		"@twurple/api": "^8.1.3",
 		"@twurple/auth": "^8.1.3",
