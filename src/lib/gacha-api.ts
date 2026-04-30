@@ -132,6 +132,20 @@ async function getSession(
 	return mintSession(discordUserId, displayName);
 }
 
+/**
+ * Public surface of `getSession` — returns the cached or freshly-minted
+ * Bearer token for a Discord user. Used by the Discord Activity OAuth
+ * token-exchange endpoint to give the gacha-client a session token after
+ * the user authenticates via the Embedded App SDK.
+ */
+export async function ensureGachaSession(
+	discordUserId: string,
+	displayName: string,
+): Promise<{ token: string; userId: string; expiresAt: number }> {
+	const s = await getSession(discordUserId, displayName);
+	return { token: s.token, userId: s.userId, expiresAt: s.expiresAt };
+}
+
 // ─── Types (minimal subset of gacha service return shapes) ──────────────────
 
 export interface GachaCard {
@@ -485,14 +499,35 @@ async function apiFetch<T>(
 		const err = json.error as
 			| { code?: string; message?: string; retryInMs?: number }
 			| undefined;
+		const flatCode = typeof json.code === "string" ? json.code : undefined;
+		const flatMessage =
+			typeof json.message === "string" ? json.message : undefined;
 		throw new GachaApiError(
-			err?.code ?? String(response.status),
-			err?.message ?? `Gacha API error ${response.status}`,
+			err?.code ?? flatCode ?? String(response.status),
+			err?.message ?? flatMessage ?? `Gacha API error ${response.status}`,
 			err?.retryInMs,
 		);
 	}
 
+	// Server-side returns `balanceAfter`; client expects `newBalance`. Mirror it
+	// recursively so all economy routes (pull, multi, daily, sell, etc.) work.
+	normalizeBalanceFields(json);
+
 	return json as T;
+}
+
+function normalizeBalanceFields(obj: unknown): void {
+	if (Array.isArray(obj)) {
+		for (const item of obj) normalizeBalanceFields(item);
+		return;
+	}
+	if (obj && typeof obj === "object") {
+		const o = obj as Record<string, unknown>;
+		if ("balanceAfter" in o && !("newBalance" in o)) {
+			o.newBalance = o.balanceAfter;
+		}
+		for (const v of Object.values(o)) normalizeBalanceFields(v);
+	}
 }
 
 // ─── Public factory ───────────────────────────────────────────────────────────
