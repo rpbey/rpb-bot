@@ -64,9 +64,16 @@ export class TokenExchangeError extends Error {
  * Exchange a Discord OAuth authorization `code` for an `access_token`
  * (server-to-server with `client_secret`), fetch the Discord user identity,
  * and mint a gacha session Bearer for that user.
+ *
+ * @param code - Authorization code from Discord OAuth (Activity SDK or PWA redirect).
+ * @param redirectUri - The redirect_uri declared in Dev Portal. For Activity flow,
+ *        Discord doesn't require this (code obtained via SDK), but providing it
+ *        keeps the OAuth2 spec-compliant. For PWA flow, MUST match the URI used
+ *        in the authorize redirect (e.g. https://play.rpbey.fr/play/).
  */
 export async function exchangeDiscordCode(
 	code: string,
+	redirectUri?: string,
 ): Promise<TokenExchangeResult> {
 	const clientId = process.env.DISCORD_CLIENT_ID;
 	const clientSecret = process.env.DISCORD_CLIENT_SECRET;
@@ -78,20 +85,31 @@ export async function exchangeDiscordCode(
 	}
 
 	// 1. Exchange code → access_token (Discord OAuth2)
+	const params = new URLSearchParams({
+		client_id: clientId,
+		client_secret: clientSecret,
+		grant_type: "authorization_code",
+		code,
+	});
+	if (redirectUri) params.set("redirect_uri", redirectUri);
+
 	const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
-		body: new URLSearchParams({
-			client_id: clientId,
-			client_secret: clientSecret,
-			grant_type: "authorization_code",
-			code,
-		}),
+		body: params,
 	});
 	if (!tokenRes.ok) {
+		// Sanitize : Discord retourne `{"error":"invalid_grant","error_description":"..."}`
+		// — on garde un extrait court et on filtre tout token_/secret_ qui pourrait apparaître.
 		const body = await tokenRes.text().catch(() => "<unreadable>");
+		const safe = body
+			.slice(0, 200)
+			.replace(
+				/(access_token|refresh_token|client_secret)["':\s]+[^"',}\s]+/gi,
+				"$1=<redacted>",
+			);
 		logger.warn(
-			{ status: tokenRes.status, body: body.slice(0, 200) },
+			{ status: tokenRes.status, body: safe },
 			"Discord OAuth token exchange failed",
 		);
 		throw new TokenExchangeError(
@@ -145,24 +163,41 @@ function loadSkuMap(): Map<string, number> {
 	return map;
 }
 
-interface DiscordEntitlementPayload {
-	type: number; // 1 = PING, otherwise event payload
+/**
+ * Webhook Events v1 envelope (cf. https://docs.discord.com/developers/events/webhook-events).
+ *
+ * - `type === 0` → PING handshake. Le handler doit répondre HTTP 204 sans body.
+ * - `type === 1` → Event dispatch. `event.type` = "ENTITLEMENT_CREATE" / etc.
+ *
+ * NB : NE PAS confondre avec Interactions Webhook v1 où `type === 1 == PING`.
+ * Webhook Events v1 = inverse. Une réponse `{type:1}` à un PING Webhook Events
+ * sera rejetée par Discord et le webhook sera désactivé après 3 fails.
+ */
+interface DiscordWebhookEnvelope {
+	version: number;
+	application_id: string;
+	type: 0 | 1;
 	event?: {
-		type: string; // e.g. "ENTITLEMENT_CREATE"
+		type: string;
+		timestamp?: string;
 		data?: {
 			id: string;
 			sku_id: string;
 			user_id: string;
-			application_id: string;
-			type: number;
-			consumed: boolean;
+			application_id?: string;
+			type?: number;
+			consumed?: boolean;
 		};
 	};
-	t?: string; // event name (when sent as Gateway-style payload)
 }
 
 export interface WebhookResult {
-	status: "pong" | "credited" | "ignored";
+	/**
+	 * - `"ping"` → handler must reply HTTP 204 (no body). Webhook Events v1 PING.
+	 * - `"credited"` → handler replies 200 with `{ ok: true, credited }`.
+	 * - `"ignored"` → handler replies 200 with `{ ok: true, status: "ignored" }`.
+	 */
+	status: "ping" | "credited" | "ignored";
 	credited?: { discordUserId: string; amount: number; sku: string };
 }
 
@@ -186,7 +221,7 @@ export class WebhookError extends Error {
  * Discord signs `timestamp + raw_body` with its app's private key ; we verify
  * with the public key from Dev Portal → General Information.
  */
-async function verifyDiscordSignature(
+export async function verifyDiscordSignature(
 	rawBody: string,
 	signatureHex: string,
 	timestamp: string,
@@ -218,7 +253,7 @@ async function verifyDiscordSignature(
 	}
 }
 
-function hexToBytes(hex: string): Uint8Array {
+export function hexToBytes(hex: string): Uint8Array {
 	if (hex.length % 2 !== 0) throw new Error("Invalid hex string");
 	const out = new Uint8Array(hex.length / 2);
 	for (let i = 0; i < out.length; i++) {
@@ -253,6 +288,22 @@ export async function handleEntitlementWebhook(args: {
 		);
 	}
 
+	// Replay protection : reject timestamps outside ±300s window.
+	const tsNum = Number(args.timestampHeader);
+	if (!Number.isFinite(tsNum)) {
+		throw new WebhookError(
+			"INVALID_SIGNATURE",
+			"X-Signature-Timestamp is not a number",
+		);
+	}
+	const drift = Math.abs(Date.now() / 1000 - tsNum);
+	if (drift > 300) {
+		throw new WebhookError(
+			"INVALID_SIGNATURE",
+			`Timestamp drift too large (${drift.toFixed(0)}s > 300s)`,
+		);
+	}
+
 	const valid = await verifyDiscordSignature(
 		args.rawBody,
 		args.signatureHeader,
@@ -263,21 +314,27 @@ export async function handleEntitlementWebhook(args: {
 		throw new WebhookError("INVALID_SIGNATURE", "Ed25519 verification failed");
 	}
 
-	let payload: DiscordEntitlementPayload;
+	let payload: DiscordWebhookEnvelope;
 	try {
 		payload = JSON.parse(args.rawBody);
 	} catch {
 		throw new WebhookError("INVALID_PAYLOAD", "Body is not valid JSON");
 	}
 
-	// Discord handshake — respond with PONG (type=1).
-	if (payload.type === 1) return { status: "pong" };
+	// Webhook Events v1 PING (handshake) : type === 0 → 204 No Content (no body).
+	if (payload.type === 0) return { status: "ping" };
+
+	// Otherwise expect type === 1 (event dispatch) per Webhook Events v1 spec.
+	if (payload.type !== 1) {
+		logger.warn({ type: payload.type }, "Unknown webhook envelope type");
+		return { status: "ignored" };
+	}
 
 	const evt = payload.event;
 	if (!evt || evt.type !== "ENTITLEMENT_CREATE" || !evt.data) {
 		return { status: "ignored" };
 	}
-	if (evt.data.consumed) return { status: "ignored" };
+	if (evt.data.consumed === true) return { status: "ignored" };
 
 	const skuMap = loadSkuMap();
 	const amount = skuMap.get(evt.data.sku_id);
@@ -296,7 +353,8 @@ export async function handleEntitlementWebhook(args: {
 		// Pas d'enum `IAP_PURCHASE` actuellement → on utilise `ADMIN_GIVE` avec une
 		// `note` typée pour la traçabilité (entitlement.id Discord = idempotent ref).
 		// TODO : ajouter `IAP_PURCHASE` au TransactionType enum quand schema:sync ok.
-		await prisma.$transaction(async (tx) => {
+		const idempotenceKey = `iap:discord:sku=${evt.data.sku_id}:entitlement=${evt.data.id}`;
+		const alreadyCredited = await prisma.$transaction(async (tx) => {
 			const user = await tx.user.findFirst({
 				where: { discordId: discordUserId },
 				select: { id: true },
@@ -307,6 +365,12 @@ export async function handleEntitlementWebhook(args: {
 					`No gacha user for discordId=${discordUserId}. Need first /play login.`,
 				);
 			}
+			// Idempotence : check if this entitlement.id has already been credited.
+			const existing = await tx.currencyTransaction.findFirst({
+				where: { note: idempotenceKey },
+				select: { id: true },
+			});
+			if (existing) return true;
 			await tx.profile.upsert({
 				where: { userId: user.id },
 				update: { currency: { increment: amount } },
@@ -317,10 +381,18 @@ export async function handleEntitlementWebhook(args: {
 					userId: user.id,
 					type: "ADMIN_GIVE",
 					amount,
-					note: `iap:discord:sku=${evt.data.sku_id}:entitlement=${evt.data.id}`,
+					note: idempotenceKey,
 				},
 			});
+			return false;
 		});
+		if (alreadyCredited) {
+			logger.info(
+				{ entitlementId: evt.data.id },
+				"IAP entitlement replay — already credited",
+			);
+			return { status: "ignored" };
+		}
 	} catch (err) {
 		if (err instanceof WebhookError) throw err;
 		logger.error({ err, discordUserId }, "Failed to credit IAP entitlement");

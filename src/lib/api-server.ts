@@ -66,6 +66,45 @@ function checkRateLimit(ip: string): boolean {
 	return true;
 }
 
+// Buckets de rate-limit dédiés par scope (OAuth token-exchange, webhook IAP, …)
+// — séparés du compteur global pour éviter qu'un endpoint chaud épuise le quota
+// IP partagé. Chaque bucket a sa propre window/max.
+const scopedBuckets = new Map<
+	string,
+	Map<string, { count: number; startTime: number }>
+>();
+
+setInterval(() => {
+	const now = Date.now();
+	for (const bucket of scopedBuckets.values()) {
+		for (const [ip, rec] of bucket.entries()) {
+			if (now - rec.startTime > 5 * 60_000) bucket.delete(ip);
+		}
+	}
+}, 60_000);
+
+function checkRateLimitFor(
+	scope: string,
+	ip: string,
+	max: number,
+	windowMs: number,
+): boolean {
+	let bucket = scopedBuckets.get(scope);
+	if (!bucket) {
+		bucket = new Map();
+		scopedBuckets.set(scope, bucket);
+	}
+	const now = Date.now();
+	const rec = bucket.get(ip);
+	if (!rec || now - rec.startTime > windowMs) {
+		bucket.set(ip, { count: 1, startTime: now });
+		return true;
+	}
+	if (rec.count >= max) return false;
+	rec.count++;
+	return true;
+}
+
 function formatUptime(ms: number): string {
 	const s = Math.floor(ms / 1000);
 	const m = Math.floor(s / 60);
@@ -153,19 +192,38 @@ const MIME: Record<string, string> = {
 	".jpg": "image/jpeg",
 	".svg": "image/svg+xml",
 	".woff2": "font/woff2",
+	".woff": "font/woff",
+	".ttf": "font/ttf",
+	".otf": "font/otf",
 	".mp3": "audio/mpeg",
 	".ogg": "audio/ogg",
+	".webm": "video/webm",
+	".wasm": "application/wasm",
+	".ico": "image/x-icon",
 };
 
-async function servePlayBundle(pathname: string): Promise<Response> {
+export async function servePlayBundle(pathname: string): Promise<Response> {
 	// Strip leading /play (mais garder les /play/chunks/... etc.)
 	let rel = pathname.replace(/^\/play/, "") || "/";
-	if (rel === "/" || rel === "") rel = "/index.html";
-
-	// Sécurité : refuser ../ (path traversal)
-	if (rel.includes("..")) {
+	// URL-decode pour bloquer aussi les variantes %2e%2e, %2f, etc.
+	let decoded: string;
+	try {
+		decoded = decodeURIComponent(rel);
+	} catch {
 		return new Response("forbidden", { status: 403 });
 	}
+	// Sécurité : refuser ../ (path traversal) — sur la version brute ET décodée.
+	if (
+		rel.includes("..") ||
+		decoded.includes("..") ||
+		decoded.includes("\0") ||
+		/%2e%2e/i.test(rel) ||
+		/%2f/i.test(rel)
+	) {
+		return new Response("forbidden", { status: 403 });
+	}
+	rel = decoded;
+	if (rel === "/" || rel === "") rel = "/index.html";
 
 	const fp = `${PLAY_BUNDLE_DIR}${rel}`;
 	const file = Bun.file(fp);
@@ -255,8 +313,14 @@ function buildServer(port: number): Server<WsData> {
 			},
 
 			// Public health probes — no auth, no state exposure beyond liveness/readiness.
-			// Consumed by systemd watchdog + `next service monitor`.
+			// Consumed by systemd watchdog + `next service monitor` + web-healthcheck.timer.
+			// `/api/health` est un alias de `/health` (cohérent avec gacha + Next apps).
 			"/health": () =>
+				Response.json(
+					{ status: "ok", uptime: process.uptime() },
+					{ headers: CORS_HEADERS },
+				),
+			"/api/health": () =>
 				Response.json(
 					{ status: "ok", uptime: process.uptime() },
 					{ headers: CORS_HEADERS },
@@ -350,15 +414,23 @@ function buildServer(port: number): Server<WsData> {
 			"/api/discord/token-exchange": {
 				POST: async (req: Request, srv: Server<WsData>) => {
 					const ip = srv.requestIP(req)?.address ?? "unknown";
-					if (!checkRateLimit(ip)) {
+					// Rate-limit dédié strict : 10 token-exchange par minute par IP
+					// (vs 60/min global). Un OAuth code Discord est single-use 10 min,
+					// donc 10/min/IP couvre largement les usages légitimes (retry,
+					// reload iframe Activity) tout en bloquant les boucles de spam.
+					if (!checkRateLimitFor("oauth", ip, 10, 60_000)) {
 						return Response.json(
 							{ error: "Too Many Requests" },
 							{ status: 429, headers: CORS_HEADERS },
 						);
 					}
 					let code: string;
+					let redirectUri: string | undefined;
 					try {
-						const body = (await req.json()) as { code?: unknown };
+						const body = (await req.json()) as {
+							code?: unknown;
+							redirect_uri?: unknown;
+						};
 						if (typeof body.code !== "string" || body.code.length < 10) {
 							return Response.json(
 								{ error: "BAD_REQUEST", message: "code (string) required" },
@@ -366,6 +438,12 @@ function buildServer(port: number): Server<WsData> {
 							);
 						}
 						code = body.code;
+						// Optional redirect_uri (required for PWA flow, ignored for Activity SDK flow).
+						// If provided, MUST match the URI used during /authorize.
+						redirectUri =
+							typeof body.redirect_uri === "string"
+								? body.redirect_uri
+								: undefined;
 					} catch {
 						return Response.json(
 							{ error: "BAD_REQUEST", message: "invalid JSON body" },
@@ -374,7 +452,7 @@ function buildServer(port: number): Server<WsData> {
 					}
 
 					try {
-						const result = await exchangeDiscordCode(code);
+						const result = await exchangeDiscordCode(code, redirectUri);
 						return Response.json(result, { headers: CORS_HEADERS });
 					} catch (err) {
 						if (err instanceof TokenExchangeError) {
@@ -401,9 +479,20 @@ function buildServer(port: number): Server<WsData> {
 			},
 
 			"/api/discord/webhook/entitlement": {
-				POST: async (req: Request) => {
+				POST: async (req: Request, srv: Server<WsData>) => {
 					// Webhook IAP Discord : signature Ed25519 obligatoire.
-					// Pas de rate-limit IP ici (Discord peut burst après une vague d'achats).
+					// Discord peut burst après une vague d'achats, mais on garde un
+					// plafond global défensif (300/min toutes IPs confondues) pour éviter
+					// qu'un attaquant spam des bodies invalides force des verify Ed25519
+					// à coût CPU non-négligeable.
+					const ip = srv.requestIP(req)?.address ?? "unknown";
+					if (!checkRateLimitFor("webhook", ip, 300, 60_000)) {
+						logger.warn({ ip }, "webhook entitlement rate-limited");
+						return new Response(null, {
+							status: 429,
+							headers: CORS_HEADERS,
+						});
+					}
 					const rawBody = await req.text();
 					const signature = req.headers.get("x-signature-ed25519");
 					const timestamp = req.headers.get("x-signature-timestamp");
@@ -413,9 +502,11 @@ function buildServer(port: number): Server<WsData> {
 							signatureHeader: signature,
 							timestampHeader: timestamp,
 						});
-						// Discord PING handshake : { type: 1 } → respond { type: 1 }
-						if (result.status === "pong") {
-							return Response.json({ type: 1 }, { headers: CORS_HEADERS });
+						// Webhook Events v1 PING (type=0) : Discord exige HTTP 204 No Content.
+						// L'ancien code répondait `{type:1}` (Interactions PONG), ce qui
+						// fait désactiver le webhook après 3 PING ratés.
+						if (result.status === "ping") {
+							return new Response(null, { status: 204, headers: CORS_HEADERS });
 						}
 						return Response.json(
 							{ ok: true, ...result },

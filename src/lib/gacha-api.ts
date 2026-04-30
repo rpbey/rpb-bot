@@ -10,10 +10,12 @@
  *      (users table is shared between gacha server and rpb-bot DB)
  *   2. Upsert user row if not present (gacha server always creates it
  *      on first login; bot creates it too via resolve())
- *   3. INSERT INTO sessions (id, userId, token, expiresAt, ...) — raw
+ *   3. **Reuse** any non-expired session for that user (avoids accumulating
+ *      one row per /play call) — only mint a fresh token if none exists.
+ *   4. INSERT INTO sessions (id, userId, token, expiresAt, ...) — raw
  *      unhashed token, same trust model as resolveServiceToken() in
- *      gacha/src/auth/middleware.ts
- *   4. Cache token in memory for 6h
+ *      gacha/src/auth/middleware.ts.
+ *   5. Cache token in memory for 6h.
  *
  * The token lookup in gacha middleware:
  *   SELECT sessions JOIN users WHERE sessions.token = ? AND NOT expired AND NOT banned
@@ -27,6 +29,8 @@ import crypto from "crypto";
 
 const BASE_URL = process.env.GACHA_API_URL ?? "http://127.0.0.1:5050";
 const SESSION_TTL_MS = 6 * 3_600_000; // 6 hours
+const SESSION_REUSE_MIN_REMAINING_MS = 30 * 60_000; // 30 min — reuse existing session if it has at least 30 min left
+const BOT_USER_AGENT = "rpb-bot/1.0";
 
 // ─── Session cache ────────────────────────────────────────────────────────────
 
@@ -37,6 +41,10 @@ interface CachedSession {
 }
 
 const sessionCache = new Map<string, CachedSession>();
+
+// In-flight Promise per discordUserId to coalesce concurrent mints (avoid race
+// when two API calls hit `ensureGachaSession` simultaneously).
+const inflightMints = new Map<string, Promise<CachedSession>>();
 
 // ─── DB pool (direct SQL — same PG instance as gacha) ────────────────────────
 // We use the same DATABASE_URL env that the bot already reads.
@@ -61,44 +69,100 @@ function getPool(): InstanceType<typeof Pool> {
 	return _pool;
 }
 
-// ─── Session minting ──────────────────────────────────────────────────────────
+// ─── User upsert (idempotent, race-safe) ──────────────────────────────────────
 
-async function mintSession(
+async function upsertUser(
+	discordUserId: string,
+	displayName: string,
+): Promise<string> {
+	const pool = getPool();
+	const newId = crypto.randomUUID();
+	const email = `${discordUserId}@discord.rpbey.fr`;
+	const now = new Date().toISOString();
+	// ON CONFLICT DO UPDATE retourne toujours la row (qu'elle soit insérée ou
+	// mise à jour) — RETURNING id donne la vérité absolue, pas de re-fetch.
+	const res = await pool.query<{ id: string }>(
+		`INSERT INTO users (id, name, email, "emailVerified", "discordId", "createdAt", "updatedAt")
+     VALUES ($1, $2, $3, false, $4, $5, $5)
+     ON CONFLICT ("discordId") DO UPDATE SET "updatedAt" = $5, name = COALESCE(users.name, $2)
+     RETURNING id`,
+		[newId, displayName, email, discordUserId, now],
+	);
+	const row = res.rows[0];
+	if (!row) {
+		throw new Error(
+			`upsertUser: no row returned for discordId=${discordUserId}`,
+		);
+	}
+	return row.id;
+}
+
+// ─── Session reuse / cleanup / mint ──────────────────────────────────────────
+
+interface SessionRow {
+	token: string;
+	expires_at: string;
+}
+
+/** Cherche une session existante encore valide (au moins 30 min restantes).
+ *  Évite de polluer la table `sessions` avec une nouvelle ligne à chaque /play. */
+async function findReusableSession(
+	userId: string,
+): Promise<CachedSession | null> {
+	const pool = getPool();
+	const minDeadline = new Date(Date.now() + SESSION_REUSE_MIN_REMAINING_MS);
+	const res = await pool.query<SessionRow>(
+		`SELECT token, "expiresAt" AS expires_at
+     FROM sessions
+     WHERE "userId" = $1 AND "expiresAt" > $2 AND "userAgent" = $3
+     ORDER BY "expiresAt" DESC
+     LIMIT 1`,
+		[userId, minDeadline.toISOString(), BOT_USER_AGENT],
+	);
+	const row = res.rows[0];
+	if (!row) return null;
+	return {
+		token: row.token,
+		userId,
+		expiresAt: new Date(row.expires_at).getTime(),
+	};
+}
+
+/** Purge les sessions expirées d'un user (best-effort, ne bloque pas le mint).
+ *  Évite la croissance illimitée de la table `sessions`. */
+async function cleanupExpiredSessions(userId: string): Promise<void> {
+	try {
+		const pool = getPool();
+		await pool.query(
+			`DELETE FROM sessions WHERE "userId" = $1 AND "expiresAt" < NOW() - interval '1 hour'`,
+			[userId],
+		);
+	} catch (err) {
+		// Best-effort : on ne fail pas le mint si la purge crash.
+		// eslint-disable-next-line no-console
+		console.warn("[gacha-api] cleanupExpiredSessions failed", err);
+	}
+}
+
+async function mintSessionInternal(
 	discordUserId: string,
 	displayName: string,
 ): Promise<CachedSession> {
 	const pool = getPool();
 
-	// 1. Look up user by discordId
-	let userRow = await pool.query<{ id: string }>(
-		'SELECT id FROM users WHERE "discordId" = $1 LIMIT 1',
-		[discordUserId],
-	);
+	// 1. Upsert user (race-safe via ON CONFLICT RETURNING).
+	const userId = await upsertUser(discordUserId, displayName);
 
-	let userId: string;
-
-	if (userRow.rows.length === 0) {
-		// 2. Create user row (mirrors what EconomyGroup.resolve() does via Prisma)
-		const newId = crypto.randomUUID();
-		const email = `${discordUserId}@discord.rpbey.fr`;
-		const now = new Date().toISOString();
-		await pool.query(
-			`INSERT INTO users (id, name, email, "emailVerified", "discordId", "createdAt", "updatedAt")
-       VALUES ($1, $2, $3, false, $4, $5, $5)
-       ON CONFLICT ("discordId") DO UPDATE SET "updatedAt" = $5`,
-			[newId, displayName, email, discordUserId, now],
-		);
-		// Re-fetch to handle the ON CONFLICT case
-		userRow = await pool.query<{ id: string }>(
-			'SELECT id FROM users WHERE "discordId" = $1 LIMIT 1',
-			[discordUserId],
-		);
-		userId = userRow.rows[0]?.id ?? newId;
-	} else {
-		userId = userRow.rows[0]!.id;
+	// 2. Réutilise une session existante si elle a >= 30 min restantes.
+	const reusable = await findReusableSession(userId);
+	if (reusable) {
+		sessionCache.set(discordUserId, reusable);
+		// Nettoyage best-effort en arrière-plan.
+		void cleanupExpiredSessions(userId);
+		return reusable;
 	}
 
-	// 3. Mint a new session token
+	// 3. Sinon mint une nouvelle session.
 	const token = crypto.randomBytes(32).toString("hex");
 	const sessionId = crypto.randomUUID();
 	const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
@@ -106,8 +170,8 @@ async function mintSession(
 
 	await pool.query(
 		`INSERT INTO sessions (id, "userId", token, "expiresAt", "createdAt", "updatedAt", "userAgent")
-     VALUES ($1, $2, $3, $4, $5, $5, 'rpb-bot/1.0')`,
-		[sessionId, userId, token, expiresAt.toISOString(), now],
+     VALUES ($1, $2, $3, $4, $5, $5, $6)`,
+		[sessionId, userId, token, expiresAt.toISOString(), now, BOT_USER_AGENT],
 	);
 
 	const session: CachedSession = {
@@ -117,7 +181,25 @@ async function mintSession(
 	};
 
 	sessionCache.set(discordUserId, session);
+	void cleanupExpiredSessions(userId);
 	return session;
+}
+
+/** Coalesce concurrent mints for the same Discord user into a single
+ *  in-flight Promise. Without this, two parallel /play taps create two
+ *  rows in `sessions` and two valid Bearer tokens — wasteful and slightly
+ *  weakens session rotation guarantees. */
+async function mintSession(
+	discordUserId: string,
+	displayName: string,
+): Promise<CachedSession> {
+	const inflight = inflightMints.get(discordUserId);
+	if (inflight) return inflight;
+	const p = mintSessionInternal(discordUserId, displayName).finally(() => {
+		inflightMints.delete(discordUserId);
+	});
+	inflightMints.set(discordUserId, p);
+	return p;
 }
 
 async function getSession(
@@ -125,7 +207,7 @@ async function getSession(
 	displayName: string,
 ): Promise<CachedSession> {
 	const cached = sessionCache.get(discordUserId);
-	// Leave 5 min buffer before expiry
+	// Leave 5 min buffer before expiry (cache layer).
 	if (cached && cached.expiresAt - Date.now() > 5 * 60_000) {
 		return cached;
 	}
@@ -144,6 +226,12 @@ export async function ensureGachaSession(
 ): Promise<{ token: string; userId: string; expiresAt: number }> {
 	const s = await getSession(discordUserId, displayName);
 	return { token: s.token, userId: s.userId, expiresAt: s.expiresAt };
+}
+
+/** Test-only : reset internal caches between tests. */
+export function __resetGachaApiCachesForTests(): void {
+	sessionCache.clear();
+	inflightMints.clear();
 }
 
 // ─── Types (minimal subset of gacha service return shapes) ──────────────────
