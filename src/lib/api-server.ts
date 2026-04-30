@@ -150,7 +150,7 @@ const CORS_HEADERS: Record<string, string> = {
  * empty ACAO (request is rejected by the browser CORS check).
  */
 const ACTIVITY_ORIGIN_RE =
-	/^https:\/\/(?:[a-z0-9-]+\.discordsays\.com|(?:canary\.|ptb\.)?discord\.com|play\.rpbey\.fr)$/i;
+	/^https:\/\/(?:[a-z0-9-]+\.discordsays\.com|(?:canary\.|ptb\.)?discord\.com|(?:bot|play)\.rpbey\.fr)$/i;
 function corsHeadersFor(req: Request): Record<string, string> {
 	const origin = req.headers.get("origin") ?? "";
 	const allow = ACTIVITY_ORIGIN_RE.test(origin) ? origin : "";
