@@ -141,6 +141,33 @@ const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Headers": "Content-Type, x-api-key",
 };
 
+/**
+ * Compute CORS headers dynamically from the request Origin. Used for the
+ * Discord Activity bridge endpoints (`/api/discord/*`) which must accept
+ * cross-origin browser requests from `*.discordsays.com` only — NOT `*`.
+ *
+ * Returns headers echoing only allowed origins ; unknown origins get an
+ * empty ACAO (request is rejected by the browser CORS check).
+ */
+const ACTIVITY_ORIGIN_RE =
+	/^https:\/\/(?:[a-z0-9-]+\.discordsays\.com|(?:canary\.|ptb\.)?discord\.com|play\.rpbey\.fr)$/i;
+function corsHeadersFor(req: Request): Record<string, string> {
+	const origin = req.headers.get("origin") ?? "";
+	const allow = ACTIVITY_ORIGIN_RE.test(origin) ? origin : "";
+	const h: Record<string, string> = {
+		Vary: "Origin",
+		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+		"Access-Control-Allow-Headers":
+			"Authorization, Content-Type, X-Requested-With, Accept, If-None-Match",
+		"Access-Control-Max-Age": "86400",
+	};
+	if (allow) {
+		h["Access-Control-Allow-Origin"] = allow;
+		h["Access-Control-Allow-Credentials"] = "true";
+	}
+	return h;
+}
+
 /** Auth middleware — validates API key on every non-OPTIONS request */
 function authenticate(req: Request): Response | null {
 	const expectedKey = process.env.BOT_API_KEY;
@@ -211,6 +238,11 @@ export async function servePlayBundle(pathname: string): Promise<Response> {
 	let decoded: string;
 	try {
 		decoded = decodeURIComponent(rel);
+		// Double-decode défense contre %252e%252e
+		const doubleDecoded = decodeURIComponent(decoded);
+		if (doubleDecoded !== decoded && /\.\.|\\|\0/.test(doubleDecoded)) {
+			return new Response("forbidden", { status: 403 });
+		}
 	} catch {
 		return new Response("forbidden", { status: 403 });
 	}
@@ -219,15 +251,26 @@ export async function servePlayBundle(pathname: string): Promise<Response> {
 		rel.includes("..") ||
 		decoded.includes("..") ||
 		decoded.includes("\0") ||
+		decoded.includes("\\") ||
 		/%2e%2e/i.test(rel) ||
-		/%2f/i.test(rel)
+		/%2f/i.test(rel) ||
+		/%5c/i.test(rel)
 	) {
 		return new Response("forbidden", { status: 403 });
 	}
 	rel = decoded;
 	if (rel === "/" || rel === "") rel = "/index.html";
 
-	const fp = `${PLAY_BUNDLE_DIR}${rel}`;
+	// Path resolution sécurisée : préfixer + verifier que le path résolu
+	// reste dans le sandbox PLAY_BUNDLE_DIR (chase symlinks possibles).
+	const { resolve: resolvePath, sep } = await import("node:path");
+	const baseDir = resolvePath(PLAY_BUNDLE_DIR);
+	const requested = resolvePath(baseDir, rel.replace(/^\/+/, ""));
+	if (!requested.startsWith(baseDir + sep) && requested !== baseDir) {
+		return new Response("forbidden", { status: 403 });
+	}
+
+	const fp = requested;
 	const file = Bun.file(fp);
 	if (!(await file.exists())) {
 		// SPA fallback : assets inconnus = 404, mais routes type /play/lobby = index.html
@@ -415,6 +458,7 @@ function buildServer(port: number): Server<WsData> {
 
 			"/api/discord/token-exchange": {
 				POST: async (req: Request, srv: Server<WsData>) => {
+					const cors = corsHeadersFor(req);
 					const ip = srv.requestIP(req)?.address ?? "unknown";
 					// Rate-limit dédié strict : 10 token-exchange par minute par IP
 					// (vs 60/min global). Un OAuth code Discord est single-use 10 min,
@@ -423,7 +467,15 @@ function buildServer(port: number): Server<WsData> {
 					if (!checkRateLimitFor("oauth", ip, 10, 60_000)) {
 						return Response.json(
 							{ error: "Too Many Requests" },
-							{ status: 429, headers: CORS_HEADERS },
+							{ status: 429, headers: cors },
+						);
+					}
+					// Body size limit : un payload OAuth fait <1KB. >8KB = abuse.
+					const cl = Number(req.headers.get("content-length") ?? "0");
+					if (cl > 8 * 1024) {
+						return Response.json(
+							{ error: "PAYLOAD_TOO_LARGE", message: "body too large" },
+							{ status: 413, headers: cors },
 						);
 					}
 					let code: string;
@@ -433,15 +485,32 @@ function buildServer(port: number): Server<WsData> {
 							code?: unknown;
 							redirect_uri?: unknown;
 						};
-						if (typeof body.code !== "string" || body.code.length < 10) {
+						if (
+							typeof body.code !== "string" ||
+							body.code.length < 10 ||
+							body.code.length > 1024
+						) {
 							return Response.json(
 								{ error: "BAD_REQUEST", message: "code (string) required" },
-								{ status: 400, headers: CORS_HEADERS },
+								{ status: 400, headers: cors },
 							);
 						}
 						code = body.code;
 						// Optional redirect_uri (required for PWA flow, ignored for Activity SDK flow).
 						// If provided, MUST match the URI used during /authorize.
+						if (
+							body.redirect_uri !== undefined &&
+							(typeof body.redirect_uri !== "string" ||
+								body.redirect_uri.length > 512)
+						) {
+							return Response.json(
+								{
+									error: "BAD_REQUEST",
+									message: "redirect_uri must be a string ≤512 chars",
+								},
+								{ status: 400, headers: cors },
+							);
+						}
 						redirectUri =
 							typeof body.redirect_uri === "string"
 								? body.redirect_uri
@@ -449,35 +518,37 @@ function buildServer(port: number): Server<WsData> {
 					} catch {
 						return Response.json(
 							{ error: "BAD_REQUEST", message: "invalid JSON body" },
-							{ status: 400, headers: CORS_HEADERS },
+							{ status: 400, headers: cors },
 						);
 					}
 
 					try {
 						const result = await exchangeDiscordCode(code, redirectUri);
-						return Response.json(result, { headers: CORS_HEADERS });
+						return Response.json(result, { headers: cors });
 					} catch (err) {
 						if (err instanceof TokenExchangeError) {
 							const status =
 								err.code === "MISSING_ENV"
 									? 500
-									: err.code === "INVALID_CODE"
+									: err.code === "INVALID_CODE" ||
+											err.code === "INVALID_REDIRECT_URI" ||
+											err.code === "CODE_REPLAY"
 										? 400
 										: 502;
 							return Response.json(
 								{ error: err.code, message: err.message },
-								{ status, headers: CORS_HEADERS },
+								{ status, headers: cors },
 							);
 						}
 						logger.error({ err }, "token-exchange unexpected failure");
 						return Response.json(
 							{ error: "INTERNAL", message: "Internal error" },
-							{ status: 500, headers: CORS_HEADERS },
+							{ status: 500, headers: cors },
 						);
 					}
 				},
-				OPTIONS: () =>
-					new Response(null, { status: 204, headers: CORS_HEADERS }),
+				OPTIONS: (req: Request) =>
+					new Response(null, { status: 204, headers: corsHeadersFor(req) }),
 			},
 
 			"/api/discord/webhook/entitlement": {
@@ -492,6 +563,15 @@ function buildServer(port: number): Server<WsData> {
 						logger.warn({ ip }, "webhook entitlement rate-limited");
 						return new Response(null, {
 							status: 429,
+							headers: CORS_HEADERS,
+						});
+					}
+					// Body size limit : webhook envelope <2KB. Reject >32KB.
+					const cl = Number(req.headers.get("content-length") ?? "0");
+					if (cl > 32 * 1024) {
+						logger.warn({ ip, cl }, "webhook payload too large");
+						return new Response(null, {
+							status: 413,
 							headers: CORS_HEADERS,
 						});
 					}

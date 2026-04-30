@@ -20,6 +20,63 @@ import { logger } from "./logger.js";
 import { ensureGachaSession } from "./gacha-api.js";
 import { prisma } from "./prisma.js";
 
+// ─── 0. Constants & helpers ───────────────────────────────────────────────────
+
+/**
+ * Whitelist `redirect_uri` accepted by the bridge for `/oauth2/token`.
+ * Discord rejects any URI not pre-registered in the Dev Portal anyway, but
+ * checking here gives faster feedback + prevents log noise / abuse.
+ *
+ * - `*.discordsays.com` covers the Activity proxy iframe (any APP_ID prefix).
+ * - `play.rpbey.fr/play/` is the PWA browser entry.
+ */
+const DEFAULT_ALLOWED_REDIRECTS = [
+	"https://play.rpbey.fr/play/",
+	"https://play.rpbey.fr/play",
+] as const;
+const ALLOWED_REDIRECT_HOST_REGEX =
+	/^https:\/\/[a-z0-9-]+\.discordsays\.com(?:\/.*)?$/i;
+
+function isAllowedRedirectUri(uri: string): boolean {
+	if (
+		DEFAULT_ALLOWED_REDIRECTS.includes(
+			uri as (typeof DEFAULT_ALLOWED_REDIRECTS)[number],
+		)
+	)
+		return true;
+	if (ALLOWED_REDIRECT_HOST_REGEX.test(uri)) return true;
+	// Allow override via env (CSV) for staging/dev.
+	const env = process.env.DISCORD_ALLOWED_REDIRECTS;
+	if (env) {
+		for (const u of env.split(",").map((s) => s.trim())) {
+			if (u && uri === u) return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Auth-code replay guard. Discord codes are single-use and expire 10 min.
+ * If a code is replayed within that window, Discord returns `invalid_grant`
+ * — but between two near-simultaneous requests with the same code, both can
+ * race past the rate limit. We hold a 11-min LRU to short-circuit replays
+ * before hitting Discord.
+ */
+const SEEN_CODES_TTL_MS = 11 * 60 * 1000;
+const SEEN_CODES_MAX = 4096;
+const seenCodes = new Map<string, number>();
+function markCodeSeen(code: string): boolean {
+	const now = Date.now();
+	const seenAt = seenCodes.get(code);
+	if (seenAt && now - seenAt < SEEN_CODES_TTL_MS) return true;
+	if (seenCodes.size >= SEEN_CODES_MAX) {
+		const oldest = seenCodes.keys().next().value;
+		if (oldest) seenCodes.delete(oldest);
+	}
+	seenCodes.set(code, now);
+	return false;
+}
+
 // ─── 1. Token exchange ────────────────────────────────────────────────────────
 
 interface DiscordTokenResponse {
@@ -52,7 +109,9 @@ export class TokenExchangeError extends Error {
 			| "MISSING_ENV"
 			| "OAUTH_FAILED"
 			| "USER_FETCH_FAILED"
-			| "INVALID_CODE",
+			| "INVALID_CODE"
+			| "INVALID_REDIRECT_URI"
+			| "CODE_REPLAY",
 		message: string,
 	) {
 		super(message);
@@ -81,6 +140,24 @@ export async function exchangeDiscordCode(
 		throw new TokenExchangeError(
 			"MISSING_ENV",
 			"DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET not configured",
+		);
+	}
+
+	// Whitelist redirect_uri to prevent abuse + log noise. Discord itself
+	// rejects unknown URIs but we fail fast.
+	if (redirectUri && !isAllowedRedirectUri(redirectUri)) {
+		throw new TokenExchangeError(
+			"INVALID_REDIRECT_URI",
+			"redirect_uri not in whitelist",
+		);
+	}
+
+	// Auth-code replay : refuse 2nd call within 11 min window (Discord codes
+	// are single-use 10 min). Mitigates parallel-replay race conditions.
+	if (markCodeSeen(code)) {
+		throw new TokenExchangeError(
+			"CODE_REPLAY",
+			"OAuth code already consumed (replay detected)",
 		);
 	}
 
@@ -150,17 +227,34 @@ export async function exchangeDiscordCode(
  * Map SKU IDs (Discord Dev Portal) to currency amounts. Configurable via env :
  *   DISCORD_SKU_<SKU_ID>=<AMOUNT>
  * Example : DISCORD_SKU_1234567890=500 → 500 pièces gacha.
+ *
+ * Frozen + memoized at first call : avoids iterating `process.env` on every
+ * webhook hit and prevents accidental mutation.
  */
-function loadSkuMap(): Map<string, number> {
+let skuMapCache: ReadonlyMap<string, number> | null = null;
+function loadSkuMap(): ReadonlyMap<string, number> {
+	if (skuMapCache) return skuMapCache;
 	const map = new Map<string, number>();
 	const prefix = "DISCORD_SKU_";
 	for (const [key, value] of Object.entries(process.env)) {
 		if (!key.startsWith(prefix) || !value) continue;
 		const skuId = key.slice(prefix.length);
 		const amount = Number(value);
-		if (Number.isFinite(amount) && amount > 0) map.set(skuId, amount);
+		if (
+			Number.isFinite(amount) &&
+			Number.isInteger(amount) &&
+			amount > 0 &&
+			amount <= 1_000_000_000
+		)
+			map.set(skuId, amount);
 	}
+	skuMapCache = map;
 	return map;
+}
+
+/** Test-only : reset the SKU cache between test cases. */
+export function __resetSkuMapForTests(): void {
+	skuMapCache = null;
 }
 
 /**
@@ -321,6 +415,24 @@ export async function handleEntitlementWebhook(args: {
 		throw new WebhookError("INVALID_PAYLOAD", "Body is not valid JSON");
 	}
 
+	// Verify the envelope targets THIS application — defense in depth in case
+	// Discord ever proxies events meant for another app to our endpoint.
+	const expectedAppId = process.env.DISCORD_CLIENT_ID;
+	if (
+		expectedAppId &&
+		payload.application_id &&
+		payload.application_id !== expectedAppId
+	) {
+		logger.warn(
+			{
+				received: payload.application_id,
+				expected: expectedAppId,
+			},
+			"Webhook application_id mismatch — ignoring",
+		);
+		return { status: "ignored" };
+	}
+
 	// Webhook Events v1 PING (handshake) : type === 0 → 204 No Content (no body).
 	if (payload.type === 0) return { status: "ping" };
 
@@ -353,6 +465,12 @@ export async function handleEntitlementWebhook(args: {
 		// Pas d'enum `IAP_PURCHASE` actuellement → on utilise `ADMIN_GIVE` avec une
 		// `note` typée pour la traçabilité (entitlement.id Discord = idempotent ref).
 		// TODO : ajouter `IAP_PURCHASE` au TransactionType enum quand schema:sync ok.
+		//
+		// Idempotence stratégie :
+		//   1. Pre-check `findFirst` (fast path, no DB lock).
+		//   2. Insert avec ON CONFLICT (UNIQUE INDEX `currency_transactions_note_idx`
+		//      sur `note WHERE note LIKE 'iap:%'`) attrape la race entre 2 webhooks
+		//      simultanés. Si la 2e insertion catch P2002 (unique violation) → idem.
 		const idempotenceKey = `iap:discord:sku=${evt.data.sku_id}:entitlement=${evt.data.id}`;
 		const alreadyCredited = await prisma.$transaction(async (tx) => {
 			const user = await tx.user.findFirst({
@@ -365,26 +483,34 @@ export async function handleEntitlementWebhook(args: {
 					`No gacha user for discordId=${discordUserId}. Need first /play login.`,
 				);
 			}
-			// Idempotence : check if this entitlement.id has already been credited.
+			// Fast path : already credited ?
 			const existing = await tx.currencyTransaction.findFirst({
 				where: { note: idempotenceKey },
 				select: { id: true },
 			});
 			if (existing) return true;
-			await tx.profile.upsert({
-				where: { userId: user.id },
-				update: { currency: { increment: amount } },
-				create: { userId: user.id, currency: amount },
-			});
-			await tx.currencyTransaction.create({
-				data: {
-					userId: user.id,
-					type: "ADMIN_GIVE",
-					amount,
-					note: idempotenceKey,
-				},
-			});
-			return false;
+			try {
+				await tx.profile.upsert({
+					where: { userId: user.id },
+					update: { currency: { increment: amount } },
+					create: { userId: user.id, currency: amount },
+				});
+				await tx.currencyTransaction.create({
+					data: {
+						userId: user.id,
+						type: "ADMIN_GIVE",
+						amount,
+						note: idempotenceKey,
+					},
+				});
+				return false;
+			} catch (err: unknown) {
+				// Prisma P2002 = unique constraint violation. Race avec une autre
+				// instance webhook → l'autre a gagné, on traite comme replay.
+				const code = (err as { code?: string }).code;
+				if (code === "P2002") return true;
+				throw err;
+			}
 		});
 		if (alreadyCredited) {
 			logger.info(
