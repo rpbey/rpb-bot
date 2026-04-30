@@ -200,6 +200,8 @@ const MIME: Record<string, string> = {
 	".webm": "video/webm",
 	".wasm": "application/wasm",
 	".ico": "image/x-icon",
+	".webmanifest": "application/manifest+json",
+	".txt": "text/plain; charset=utf-8",
 };
 
 export async function servePlayBundle(pathname: string): Promise<Response> {

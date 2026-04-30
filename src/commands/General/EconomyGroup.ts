@@ -271,7 +271,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -366,7 +367,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -451,6 +453,7 @@ export class EconomyGroup {
 
       return interaction.editReply({ embeds: [embed] });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.editReply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
@@ -464,7 +467,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -518,6 +522,7 @@ export class EconomyGroup {
 
       return reply;
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.editReply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
@@ -531,7 +536,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -569,6 +575,7 @@ export class EconomyGroup {
 
       return reply;
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.editReply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
@@ -589,7 +596,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.reply({ embeds: [serviceDownEmbed()], flags: MessageFlags.Ephemeral });
     }
 
@@ -630,6 +638,7 @@ export class EconomyGroup {
         ],
       });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.reply({ embeds: [gachaErrorEmbed(err)], flags: MessageFlags.Ephemeral });
       return interaction.reply({ embeds: [serviceDownEmbed()], flags: MessageFlags.Ephemeral });
     }
@@ -641,7 +650,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.reply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -679,6 +689,7 @@ export class EconomyGroup {
         ],
       });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.reply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.reply({ embeds: [serviceDownEmbed()] });
     }
@@ -701,7 +712,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -758,6 +770,7 @@ export class EconomyGroup {
 
       return interaction.editReply({ embeds: [mainEmbed] });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.editReply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
@@ -771,7 +784,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -841,6 +855,7 @@ export class EconomyGroup {
 
       return interaction.editReply({ embeds: [embed] });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.editReply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
@@ -854,7 +869,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -882,6 +898,7 @@ export class EconomyGroup {
         ],
       });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.editReply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
@@ -895,7 +912,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -924,6 +942,7 @@ export class EconomyGroup {
         ],
       });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.editReply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
@@ -937,7 +956,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -979,6 +999,7 @@ export class EconomyGroup {
         ],
       });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.editReply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
@@ -1068,11 +1089,19 @@ export class EconomyGroup {
       return interaction.reply({ content: '❌ Montant invalide.', flags: MessageFlags.Ephemeral });
     }
 
+    if (Math.abs(amount) > 1_000_000) {
+      return interaction.reply({
+        content: '❌ Montant maximum : **±1 000 000** 🪙 par transaction (limite anti-abus).',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
     // Use gacha API admin grant endpoint
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.reply({ embeds: [serviceDownEmbed()], flags: MessageFlags.Ephemeral });
     }
 
@@ -1117,6 +1146,7 @@ export class EconomyGroup {
         ],
       });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.reply({ embeds: [gachaErrorEmbed(err)], flags: MessageFlags.Ephemeral });
       return interaction.reply({ embeds: [serviceDownEmbed()], flags: MessageFlags.Ephemeral });
     }
@@ -1415,7 +1445,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -1480,6 +1511,7 @@ export class EconomyGroup {
         ...(cardAttachment ? { files: [cardAttachment] } : {}),
       });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.editReply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
@@ -1634,7 +1666,8 @@ export class EconomyGroup {
     let myApi: GachaApiClient;
     try {
       myApi = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -1701,6 +1734,7 @@ export class EconomyGroup {
         ],
       });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.editReply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.editReply({ embeds: [serviceDownEmbed()] });
     }
@@ -1712,7 +1746,8 @@ export class EconomyGroup {
     let api: GachaApiClient;
     try {
       api = await this.api(interaction);
-    } catch {
+    } catch (err) {
+      console.error(`[gacha:${interaction.commandName}] api init failed`, err);
       return interaction.reply({ embeds: [serviceDownEmbed()] });
     }
 
@@ -1755,6 +1790,7 @@ export class EconomyGroup {
         ...(bannerAttachment ? { files: [bannerAttachment] } : {}),
       });
     } catch (err) {
+      if (!(err instanceof GachaApiError)) console.error(`[gacha:${interaction.commandName}] unhandled`, err);
       if (err instanceof GachaApiError) return interaction.reply({ embeds: [gachaErrorEmbed(err)] });
       return interaction.reply({ embeds: [serviceDownEmbed()] });
     }
