@@ -13,6 +13,25 @@ import { logger } from '../../lib/logger.js';
 import { PrismaService } from '../../lib/prisma.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// MIGRATION NOTE (2026-04-30) — TCG Duel
+// ═══════════════════════════════════════════════════════════════════════════════
+// The gacha service exposes the full TCG duel pipeline at:
+//   POST /api/duel/propose, /accept, /decline, /play, /forfeit
+//   GET  /api/duel/active, /history
+// Use `createGachaClient()` from `lib/gacha-api.ts` for typed wrappers.
+//
+// This file intentionally keeps direct Prisma access for now — the rich
+// Discord UI flow (buttons, select menus, animation delays, ELO display) is
+// tightly coupled to the local DB shape. A full migration to the API would
+// require rewriting the FSM-driven UI layer. Until then, both paths work
+// against the same shared PG18 DB (latency ~0 ms) so behaviour is identical.
+//
+// Refactor priority: P3 — only after the FSM in gacha/services/duel.ts
+// becomes the single source of truth (drop in-memory liveDuels Map and
+// fully persist intermediate states).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
