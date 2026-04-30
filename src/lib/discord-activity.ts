@@ -28,9 +28,16 @@ import { prisma } from "./prisma.js";
  * checking here gives faster feedback + prevents log noise / abuse.
  *
  * - `*.discordsays.com` covers the Activity proxy iframe (any APP_ID prefix).
- * - `play.rpbey.fr/play/` is the PWA browser entry.
+ * - `bot.rpbey.fr/play/` is the **canonical PWA browser entry** — c'est là
+ *   où le bundle gacha-client est servi en prod (via rpb-bot servePlayBundle).
+ * - `play.rpbey.fr/play/` reste accepté en cas de migration future du bundle.
+ *
+ * IMPORTANT : ces URI doivent aussi être déclarés dans Discord Dev Portal →
+ * OAuth2 → Redirects (sinon Discord rejette en amont avec `redirect_uri_mismatch`).
  */
 const DEFAULT_ALLOWED_REDIRECTS = [
+	"https://bot.rpbey.fr/play/",
+	"https://bot.rpbey.fr/play",
 	"https://play.rpbey.fr/play/",
 	"https://play.rpbey.fr/play",
 ] as const;
